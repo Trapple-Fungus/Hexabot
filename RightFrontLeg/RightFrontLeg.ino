@@ -79,15 +79,7 @@ const int SWING_STEPS   = 30;  // resolution of the Bezier swing arc
 const int STANCE_STEPS  = 30;  // resolution of the ground push-back
 const int STEP_DELAY_MS = 15;  // time between steps -> overall cycle speed
 
-void setup() {
-  coxa.attach(COXA_PIN);
-  femur.attach(FEMUR_PIN);
-  tibia.attach(TIBIA_PIN);
-  applyPose(GROUND_BACK);
-  delay(1000);
-}
-
-void loop() {
+void runGaitCycle() {
   // ---- Swing phase: Bezier arc GROUND_BACK -> LIFT_APEX -> GROUND_FRONT ----
   // A plain quadratic Bezier only gets pulled toward its control point,
   // it doesn't pass through it. Inflating the control point like this
@@ -111,5 +103,26 @@ void loop() {
     float t = easeInOutCubic((float)i / STANCE_STEPS);
     applyPose(lerpPose(GROUND_FRONT, GROUND_BACK, t));
     delay(STEP_DELAY_MS);
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+  coxa.attach(COXA_PIN);
+  femur.attach(FEMUR_PIN);
+  tibia.attach(TIBIA_PIN);
+  applyPose(GROUND_BACK);
+  Serial.println("Leg ready. Press 'r' in the Serial Monitor and hit Enter to run a gait cycle.");
+}
+
+void loop() {
+  // Idle holding GROUND_BACK until 'r' arrives over Serial, then run one
+  // full swing+stance cycle. Any other characters (e.g. the newline sent
+  // along with 'r') are ignored.
+  if (Serial.available() > 0) {
+    char c = Serial.read();
+    if (c == 'r' || c == 'R') {
+      runGaitCycle();
+    }
   }
 }
