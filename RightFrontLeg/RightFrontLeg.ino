@@ -26,6 +26,17 @@ const int COXA_OFFSET  = 0;
 const int FEMUR_OFFSET = 0;
 const int TIBIA_OFFSET = 0;
 
+// ---- 270-degree servo pulse range ----
+// Arduino's Servo::write() always clamps its input to 0-180 before mapping
+// to a pulse width, so it physically can't reach past 180 deg no matter what
+// you pass it. To get the full sweep we map logical degrees (0-270)
+// straight to microseconds ourselves and call writeMicroseconds(). These
+// pulse widths are typical for 270-degree hobby servos but check your
+// servo's datasheet and tune if it buzzes/stalls at either end.
+const int SERVO_MIN_US = 500;
+const int SERVO_MAX_US = 2500;
+const int SERVO_MAX_DEG = 270;
+
 struct LegPose {
   float coxa;
   float femur;
@@ -34,8 +45,9 @@ struct LegPose {
 
 void writeJoint(Servo &s, float logicalDeg, int offset) {
   int deg = (int)round(logicalDeg) + offset;
-  deg = constrain(deg, 0, 180);
-  s.write(deg);
+  deg = constrain(deg, 0, SERVO_MAX_DEG);
+  int us = map(deg, 0, SERVO_MAX_DEG, SERVO_MIN_US, SERVO_MAX_US);
+  s.writeMicroseconds(us);
 }
 
 void applyPose(const LegPose &p) {
@@ -71,9 +83,9 @@ float easeInOutCubic(float t) {
 // GROUND_BACK  : foot down, swept toward the rear  -> end of stance / start of swing
 // LIFT_APEX    : foot raised, swept to the middle  -> top corner of the triangle
 // GROUND_FRONT : foot down, swept toward the front -> end of swing / start of stance
-LegPose GROUND_BACK  = { 70,  25, 40 };
-LegPose LIFT_APEX    = { 90,  70, 90 };
-LegPose GROUND_FRONT = { 110, 25, 40 };
+LegPose GROUND_BACK  = { 40,  80, 60 };
+LegPose LIFT_APEX    = { 80,  150, 90 };
+LegPose GROUND_FRONT = { 180, 80, 60 };
 
 const int SWING_STEPS   = 30;  // resolution of the Bezier swing arc
 const int STANCE_STEPS  = 30;  // resolution of the ground push-back
@@ -108,9 +120,9 @@ void runGaitCycle() {
 
 void setup() {
   Serial.begin(9600);
-  coxa.attach(COXA_PIN);
-  femur.attach(FEMUR_PIN);
-  tibia.attach(TIBIA_PIN);
+  coxa.attach(COXA_PIN, SERVO_MIN_US, SERVO_MAX_US);
+  femur.attach(FEMUR_PIN, SERVO_MIN_US, SERVO_MAX_US);
+  tibia.attach(TIBIA_PIN, SERVO_MIN_US, SERVO_MAX_US);
   applyPose(GROUND_BACK);
   Serial.println("Leg ready. Press 'r' in the Serial Monitor and hit Enter to run a gait cycle.");
 }

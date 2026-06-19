@@ -37,17 +37,32 @@ necessarily the raw `servo.write()` degrees, see Calibration below.
 
 Real servos rarely have their mechanical zero land exactly on the logical zero
 above. `COXA_OFFSET`, `FEMUR_OFFSET`, and `TIBIA_OFFSET` (top of the sketch, all
-`0` by default) are added to the logical angle before it's sent to `servo.write()`:
+`0` by default) are added to the logical angle before it's sent to the servo:
 
 ```cpp
 int deg = (int)round(logicalDeg) + offset;
-deg = constrain(deg, 0, 180);
+deg = constrain(deg, 0, SERVO_MAX_DEG);
+int us = map(deg, 0, SERVO_MAX_DEG, SERVO_MIN_US, SERVO_MAX_US);
+s.writeMicroseconds(us);
 ```
 
 If, say, your femur servo's true "vertical down" position is actually
-`servo.write(75)` rather than `servo.write(0)`, set `FEMUR_OFFSET = 75`. Tune these
-first, against the leg's real resting pose, before touching anything else —
-the trajectory math always works purely in logical angles.
+75° rather than 0°, set `FEMUR_OFFSET = 75`. Tune these first, against the leg's
+real resting pose, before touching anything else — the trajectory math always
+works purely in logical angles.
+
+### Why `writeMicroseconds` instead of `servo.write()`
+
+These are 270° servos, but Arduino's `Servo::write()` always clamps its input
+to 0–180° before mapping it to a pulse width — it physically cannot reach past
+180° no matter what you pass it. To use the full sweep, logical degrees
+(0–270, `SERVO_MAX_DEG`) are mapped straight to a pulse width in microseconds
+and sent with `writeMicroseconds()` instead. `SERVO_MIN_US`/`SERVO_MAX_US`
+(default `500`/`2500`) are typical for 270° hobby servos but aren't guaranteed
+for your exact model — if a servo buzzes, stalls, or stops short of where you
+told it to go, narrow this range and re-check against the datasheet. The same
+range is also passed to each `servo.attach(pin, min, max)` call so the pulse
+values aren't clipped back down to the library's narrower default.
 
 ## How the motion works
 
@@ -59,13 +74,15 @@ coxa/femur/tibia angle triple), defined near the top of the file:
 - `GROUND_FRONT` — foot down, swept toward the front. End of swing / start of stance.
 
 ```cpp
-LegPose GROUND_BACK  = { 70,  25, 40 };
-LegPose LIFT_APEX    = { 90,  70, 90 };
-LegPose GROUND_FRONT = { 110, 25, 40 };
+LegPose GROUND_BACK  = { 40,  50,  40 };
+LegPose LIFT_APEX    = { 80,  265, 90 };
+LegPose GROUND_FRONT = { 120, 50,  40 };
 ```
 
-These starting values are **placeholders** — tune them once the leg is powered up
-(see Tuning below).
+These values are still being tuned against the real leg — adjust them further
+as needed (see Tuning below). Note the femur apex (`265°`) is right up against
+the servo's `270°` hard limit, so there's very little headroom left before it
+strains; back it off if the servo buzzes or stalls there.
 
 Each full cycle (`loop()`) has two phases:
 
@@ -113,8 +130,8 @@ character is ignored. This is handled in `loop()` by `Serial.available()` /
 
 ## Tuning the leg
 
-1. Upload the sketch. On `setup()` it moves straight to `GROUND_BACK` and holds for
-   1 second so you can check the resting pose before it starts moving.
+1. Upload the sketch. On `setup()` it moves straight to `GROUND_BACK` and holds
+   there so you can check the resting pose before triggering any movement.
 2. Watch the swing phase — adjust `LIFT_APEX`'s femur/tibia angles until the foot
    clears the ground by the amount you want without overdriving the servo.
 3. Adjust `GROUND_BACK` and `GROUND_FRONT`'s coxa angles to set how far the leg
