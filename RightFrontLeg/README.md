@@ -4,6 +4,10 @@ This sketch (`RightFrontLeg.ino`) drives a single hexapod leg (3 servos: coxa, f
 tibia) through a triangular foot path using Bezier-curve motion, so the servos ease
 in and out instead of snapping between positions.
 
+> **Note:** full-robot walking now lives in [`../Hexapod/`](../Hexapod/), which
+> handles all 6 legs with a tripod gait (forward/backward/crab/turn). This sketch
+> is kept as a standalone testbed for exercising a freshly built leg in isolation.
+
 ## Hardware as described
 
 - 3D-printed black leg assembly with a triangular truss link at the top.
@@ -140,10 +144,10 @@ character is ignored. This is handled in `loop()` by `Serial.available()` /
    (more steps + lower delay-per-step = smoother but same total time; fewer steps =
    choppier).
 
-## Next steps (not yet implemented)
+## Next steps
 
-This sketch only drives one leg. For full hexapod walking you'd run this same
-swing/stance state machine on all 6 legs simultaneously, with the two tripod
-groups (legs 1/3/5 and 2/4/6, or however your gait pairs them) running 180° out
-of phase with each other — i.e., one tripod is in swing phase while the other is
-in stance phase, then they swap.
+Full hexapod walking is implemented in [`../Hexapod/`](../Hexapod/): the same
+swing/stance approach runs on all 6 legs with two tripod groups (RF/RR/LM and
+RM/LF/LR) 180° out of phase — one tripod swings while the other pushes, then
+they swap. Once a new leg passes its solo test with this sketch, wire it to its
+pins from the Hexapod README's pin table and flip its `enabled` flag there.
