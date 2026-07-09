@@ -2,9 +2,10 @@
 
 `Hexapod.ino` drives the full robot: 6 legs × 3 joints (coxa/femur/tibia),
 18 servos total. On boot, every **enabled** leg moves to the neutral standing
-pose from the reference photo and holds it. Serial commands then walk the
-robot **forward, backward, sideways (crab), or turn in place** using a tripod
-gait, and a calibration UI lets you tune each joint's mechanical offset live.
+pose (sized against the CAD-measured leg segments) and holds it. Serial
+commands then walk the robot **forward, backward, sideways (crab), or turn in
+place** using a tripod gait with Bezier-curve swing paths, and a calibration
+UI lets you tune each joint's mechanical offset live.
 
 ## Hardware setup
 
@@ -66,11 +67,15 @@ The six legs are split into two tripods, each with **2 legs from one side and
 - **Tripod A** = RF, RR, LM (legs 0, 2, 4)
 - **Tripod B** = RM, LF, LR (legs 1, 3, 5)
 
-Each half-cycle, one tripod **swings** (feet lift in a parabolic arc and land
-at their next foothold) while the other tripod is in **stance** (feet stay
-down and push the body). Then the roles swap. Both phases run through an
-ease-in-out cubic so the servos accelerate and decelerate smoothly instead of
-jerking.
+Each half-cycle, one tripod **swings** — each foot arcs to its next foothold
+along a **quadratic Bezier curve** (start → lifted apex → target, with the
+control point inflated so the curve actually passes through the apex at
+mid-swing, same as the single-leg sketch) — while the other tripod is in
+**stance** (feet stay loaded on the ground and push the body in a straight
+line). Then the roles swap. Both phases run their timing through an
+ease-in-out cubic. The curved path plus the eased timing means the servos
+never see a velocity discontinuity at lift-off or touch-down — that's what
+keeps shock loads off the gear trains.
 
 Every leg interpolates from *wherever it currently is* to its target, so
 starting from standstill, stopping, and switching direction are all smooth —
@@ -101,11 +106,15 @@ same rotational sense, which is opposite signs on opposite sides.
 
 ### Gait tuning constants (top of the sketch)
 
+Defaults are derived from the CAD-measured leg geometry (femur ~105 mm
+axis-to-axis, tibia+foot ~140 mm, hip ~113 mm from body center → foot
+~274 mm from center at neutral).
+
 | Constant | Default | Meaning |
 |----------|---------|---------|
-| `STRIDE_DEG` | 25 | Coxa half-sweep at full stride factor — stride length |
-| `LIFT_FEMUR` | 25 | Extra femur lift at mid-swing — foot clearance |
-| `LIFT_TIBIA` | 20 | Extra tibia fold at mid-swing (flip sign if the foot digs down instead of tucking up) |
+| `STRIDE_DEG` | 20 | Coxa half-sweep at full stride factor — ~187 mm/step for mid legs; keeps adjacent feet ≥140 mm apart at full stride |
+| `LIFT_FEMUR` | 10 | Femur lift at the swing apex — together with `LIFT_TIBIA` the foot rises ~39 mm |
+| `LIFT_TIBIA` | 6 | Tibia fold at the swing apex (flip sign if the foot digs down instead of tucking up) |
 | `GAIT_STEPS` | 30 | Interpolation steps per half-cycle — smoothness |
 | `STEP_MS` | 15 | ms per step — overall speed (half-cycle ≈ 450 ms) |
 
@@ -139,11 +148,21 @@ All poses are written in body-frame logical degrees; the per-leg `sign` and
 - **Tibia**: `0°` = in line with the femur (leg straight). Negative bends
   the foot down toward the ground.
 
-The neutral stance (from the photo — knee up, foot below and outboard):
+The neutral stance (knee up, foot below and outboard), sized against the
+measured leg segments:
 
 ```cpp
-const LegPose NEUTRAL = { 0, 35, -65 };  // coxa, femur, tibia
+const LegPose NEUTRAL = { 0, 30, -90 };  // coxa, femur, tibia
 ```
+
+With femur ≈ 105 mm and tibia+foot ≈ 140 mm this puts the foot ~161 mm
+outboard of the hip and **~69 mm below the femur axis** — actual ground
+clearance for the 65 mm-tall body. The earlier photo-eyeballed pose
+`{0, 35, −65}` computes to the foot ~10 mm *above* the hip axis with these
+segment lengths, i.e. the belly would rest on the floor. If the physical
+robot stands too low or too tall, adjust `NEUTRAL`'s tibia angle first
+(steeper = taller) and re-check each servo's `offsetDeg` with the
+calibration UI.
 
 Mapping to a servo: `servoDeg = 135 + sign × logicalDeg + offsetDeg`, then
 converted to a 500–2500 µs pulse across 270° and sent as microseconds to

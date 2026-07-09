@@ -6,17 +6,25 @@ by an ELEGOO UNO R3 through a PCA9685 16-channel PWM driver.
 
 ## Hardware
 
-- **Body**: 3D-printed hexagonal plate with six identical servo pockets
-  around the perimeter, one per corner.
+- **Body**: 3D-printed hexagonal plate, 227 × 186 mm and 65 mm tall
+  (measured from `Body.3mf`), with six identical servo pockets around the
+  perimeter ~113 mm from center, one per corner.
 - **Per leg**: Miuzei MS24 270° digital servo for the coxa (hip yaw,
   vertical axis) + two 20 kg-class 270° metal-gear digital servos for the
-  femur and tibia (pitch, horizontal axes). Femur ~100–120 mm, tibia
-  ~130–150 mm to the foot tip.
-- **Stance**: spider-like inverted-V — hip up to the knee (femur ~+35°
-  above horizontal), then steeply down to the foot (tibia ~−65° off the
-  femur line), foot landing outboard of the body.
+  femur and tibia (pitch, horizontal axes). Measured from the print files:
+  femur link 125 mm (~105 mm axis-to-axis), tibia part 100 mm (~140 mm
+  knee-to-foot-tip with the foot).
+- **Stance**: spider-like inverted-V — hip up to the knee (femur +30°
+  above horizontal), then steeply down to the foot (tibia −90° off the
+  femur line), foot landing ~161 mm outboard of the hip with ~69 mm of
+  ground clearance below the femur axis.
 - **Controller**: ELEGOO UNO R3 (Arduino Uno clone) + PCA9685 16-channel
   I2C PWM servo driver (address 0x40).
+
+Part dimensions come from `Cad files/(C) measure_parts.py`, which prints
+the bounding box of every STL/3MF in `Cad files/3D print files/` — re-run
+it after reprinting parts and re-derive the gait constants if lengths
+change.
 
 Left-side legs are mirror images of right-side legs; the code handles this
 with a per-leg direction-sign table.

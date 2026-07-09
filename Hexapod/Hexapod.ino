@@ -42,6 +42,16 @@ const uint32_t PCA_OSC_HZ    = 27000000;  // nominal internal oscillator — it
                                           // varies board to board, so trim this
                                           // if measured pulses run long/short
 
+// ---- Leg geometry (measured from the CAD 3D-print files) ----
+// Femur link (motor holder parts): 125 mm part, ~105 mm axis-to-axis.
+// Tibia part: 100 mm, ~140 mm knee axis to foot tip with the foot on.
+// Body: 227 x 186 mm hex plate, hip pockets ~113 mm from center.
+// The sketch works purely in joint angles — these numbers are what the
+// pose and gait constants below were derived from, so re-derive those
+// if the printed parts change.
+const float FEMUR_MM = 105;
+const float TIBIA_MM = 140;
+
 const int NUM_LEGS   = 6;
 const int NUM_JOINTS = 3;
 enum Joint { COXA = 0, FEMUR = 1, TIBIA = 2 };
@@ -58,11 +68,14 @@ struct LegPose {
   float tibia;
 };
 
-// Standing pose from the reference photo: coxa centered radially
-// outward, femur ~+35 deg above horizontal (knee is the highest point),
-// tibia ~-65 deg off the femur line so the foot sits below and outboard
-// of the body.
-const LegPose NEUTRAL = { 0, 35, -65 };
+// Standing pose, sized against the measured leg (femur ~105 mm axis to
+// axis, tibia+foot ~140 mm): knee up at +30 deg, tibia -90 deg off the
+// femur line. That puts the foot ~161 mm outboard of the hip and ~69 mm
+// below the femur axis — real ground clearance for the 65 mm-tall body.
+// (The old photo-eyeballed pose {0,35,-65} computes to the foot ~10 mm
+// ABOVE the hip axis with these segment lengths — belly on the floor.)
+// Verify against the physical leg and trim with the calibration UI.
+const LegPose NEUTRAL = { 0, 30, -90 };
 
 // ---- Per-leg configuration ----
 // sign flips a joint's direction: left-side legs are mirror images of
@@ -101,12 +114,19 @@ LegConfig legs[NUM_LEGS] = {
 // Tripod B = RM, LF, LR (legs 1, 3, 5) — 1 right + 2 left.
 const bool TRIPOD_A[NUM_LEGS] = { true, false, true, false, true, false };
 
-// ---- Gait tuning ----
-const float STRIDE_DEG = 25;  // coxa half-sweep at full stride factor
-const float LIFT_FEMUR = 25;  // extra femur lift at mid-swing (foot up)
-const float LIFT_TIBIA = 20;  // extra tibia at mid-swing; positive folds
-                              // the foot up toward the femur line — flip
-                              // the sign if your foot digs down instead
+// ---- Gait tuning (derived from the measured geometry) ----
+const float STRIDE_DEG = 20;  // coxa half-sweep at full stride factor:
+                              // ~187 mm/step for mid legs at the 274 mm
+                              // foot radius, and adjacent feet stay
+                              // >=140 mm apart at full stride (25 deg
+                              // was 271 mm steps with only 107 mm gap)
+const float LIFT_FEMUR = 10;  // swing-apex lift; with LIFT_TIBIA = 6 the
+const float LIFT_TIBIA = 6;   // foot rises ~39 mm — clears the ground
+                              // without wasting servo travel (the old
+                              // 25/20 lifted ~120 mm every step). Tibia
+                              // positive folds the foot up toward the
+                              // femur line — flip the sign if your foot
+                              // digs down instead
 const int   GAIT_STEPS = 30;  // interpolation steps per half-cycle
 const int   STEP_MS    = 15;  // ms per step (speed of the gait)
 
@@ -221,6 +241,17 @@ LegPose lerpPose(const LegPose &a, const LegPose &b, float t) {
   return r;
 }
 
+// Quadratic Bezier through p0 / control p1 / p2 — the swing-phase path,
+// same approach as the single-leg test sketch.
+LegPose bezierPose(const LegPose &p0, const LegPose &p1, const LegPose &p2, float t) {
+  float u = 1.0f - t;
+  LegPose r;
+  r.coxa  = u * u * p0.coxa  + 2 * u * t * p1.coxa  + t * t * p2.coxa;
+  r.femur = u * u * p0.femur + 2 * u * t * p1.femur + t * t * p2.femur;
+  r.tibia = u * u * p0.tibia + 2 * u * t * p1.tibia + t * t * p2.tibia;
+  return r;
+}
+
 // Eases velocity at the start/end of each phase instead of an instant
 // start/stop, which is the main thing that shock-loads the servos.
 float easeInOutCubic(float t) {
@@ -229,31 +260,43 @@ float easeInOutCubic(float t) {
 
 // ---- Gait engine ----
 // One half-cycle: the swinging tripod lifts and arcs to its forward
-// foothold while the stance tripod stays down and pushes the body.
-// Every leg interpolates from wherever it currently is to its target,
-// so starting from neutral, stopping, and changing direction at a
-// half-cycle boundary are all smooth — no assumed start positions.
+// foothold along a quadratic Bezier curve (start -> lifted apex ->
+// target) while the stance tripod stays down and pushes the body in a
+// straight line. The Bezier plus the ease-in-out timing means the
+// servos see no velocity discontinuities at lift-off or touch-down —
+// that's what keeps shock loads off the gears. Every leg interpolates
+// from wherever it currently is to its target, so starting from
+// neutral, stopping, and changing direction at a half-cycle boundary
+// are all smooth — no assumed start positions.
 void runHalfCycle(bool aSwings, Motion m) {
-  LegPose start[NUM_LEGS], target[NUM_LEGS];
+  LegPose start[NUM_LEGS], target[NUM_LEGS], control[NUM_LEGS];
   for (uint8_t li = 0; li < NUM_LEGS; li++) {
     start[li]  = currentPose[li];
     target[li] = NEUTRAL;
     float dir = (TRIPOD_A[li] == aSwings) ? +1 : -1;  // swing lands front, stance pushes rear
     target[li].coxa += dir * strideFactor(m, li) * STRIDE_DEG;
+
+    // Swing apex = midpoint of the move plus the lift. A plain quadratic
+    // Bezier only gets pulled toward its control point, it doesn't pass
+    // through it, so the control point is inflated
+    // (2*apex - 0.5*(start+target)) to make the curve actually hit the
+    // apex at t = 0.5 — same trick as the single-leg sketch.
+    LegPose apex = lerpPose(start[li], target[li], 0.5f);
+    apex.femur += LIFT_FEMUR;
+    apex.tibia += LIFT_TIBIA;
+    control[li].coxa  = 2 * apex.coxa  - 0.5f * (start[li].coxa  + target[li].coxa);
+    control[li].femur = 2 * apex.femur - 0.5f * (start[li].femur + target[li].femur);
+    control[li].tibia = 2 * apex.tibia - 0.5f * (start[li].tibia + target[li].tibia);
   }
 
   for (int i = 0; i <= GAIT_STEPS; i++) {
     float t = easeInOutCubic((float)i / GAIT_STEPS);
-    // Parabolic lift bump: 0 at both ends of the swing, max at mid-swing
-    // (this IS the quadratic Bezier arc from the single-leg sketch, in
-    // the degenerate case where both ground endpoints share a height).
-    float bump = 4 * t * (1 - t);
     for (uint8_t li = 0; li < NUM_LEGS; li++) {
-      LegPose p = lerpPose(start[li], target[li], t);
-      if (TRIPOD_A[li] == aSwings) {
-        p.femur += LIFT_FEMUR * bump;
-        p.tibia += LIFT_TIBIA * bump;
-      }
+      // Swinging feet arc through the air on the Bezier; stance feet are
+      // loaded on the ground, so they move low and straight instead.
+      LegPose p = (TRIPOD_A[li] == aSwings)
+                    ? bezierPose(start[li], control[li], target[li], t)
+                    : lerpPose(start[li], target[li], t);
       applyLegPose(li, p);
     }
     delay(STEP_MS);
