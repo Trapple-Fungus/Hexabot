@@ -1,4 +1,5 @@
-#include <Servo.h>
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>  // Adafruit PWM Servo Driver Library
 
 // ============================================================
 // Single-leg test sketch: right-front coxa/femur/tibia leg.
@@ -6,14 +7,23 @@
 // forward -> ground contact -> drag back) using a quadratic
 // Bezier curve for the swing phase, so the servos accelerate
 // and decelerate smoothly instead of snapping between angles.
+//
+// Servos are driven by a PCA9685 16-channel I2C PWM board
+// (SDA=A4, SCL=A5, address 0x40), matching the full Hexapod
+// sketch's wiring — the RF leg's channels double as the test
+// channels, so a leg under test plugs straight into CH0-CH2.
 // ============================================================
 
-// ---- Pin assignment ----
-const int COXA_PIN  = 9;
-const int FEMUR_PIN = 10;
-const int TIBIA_PIN = 11;
+// ---- PCA9685 channel assignment ----
+// Point these at whichever channels the leg under test is plugged into.
+const int COXA_CH  = 0;
+const int FEMUR_CH = 1;
+const int TIBIA_CH = 2;
 
-Servo coxa, femur, tibia;
+const int      SERVO_FREQ_HZ = 50;        // standard 20 ms servo frame
+const uint32_t PCA_OSC_HZ    = 27000000;  // nominal; trim if pulses run long/short
+
+Adafruit_PWMServoDriver pwm;  // default I2C address 0x40
 
 // ---- Calibration offsets ----
 // Logical angle convention used throughout this sketch:
@@ -27,12 +37,11 @@ const int FEMUR_OFFSET = 0;
 const int TIBIA_OFFSET = 0;
 
 // ---- 270-degree servo pulse range ----
-// Arduino's Servo::write() always clamps its input to 0-180 before mapping
-// to a pulse width, so it physically can't reach past 180 deg no matter what
-// you pass it. To get the full sweep we map logical degrees (0-270)
-// straight to microseconds ourselves and call writeMicroseconds(). These
-// pulse widths are typical for 270-degree hobby servos but check your
-// servo's datasheet and tune if it buzzes/stalls at either end.
+// Logical degrees (0-270) are mapped straight to a pulse width in
+// microseconds and sent with pwm.writeMicroseconds(), so the servos'
+// full travel is usable. These pulse widths are typical for 270-degree
+// hobby servos but check your servo's datasheet and tune if it
+// buzzes/stalls at either end.
 const int SERVO_MIN_US = 500;
 const int SERVO_MAX_US = 2500;
 const int SERVO_MAX_DEG = 270;
@@ -43,17 +52,17 @@ struct LegPose {
   float tibia;
 };
 
-void writeJoint(Servo &s, float logicalDeg, int offset) {
+void writeJoint(int channel, float logicalDeg, int offset) {
   int deg = (int)round(logicalDeg) + offset;
   deg = constrain(deg, 0, SERVO_MAX_DEG);
   int us = map(deg, 0, SERVO_MAX_DEG, SERVO_MIN_US, SERVO_MAX_US);
-  s.writeMicroseconds(us);
+  pwm.writeMicroseconds(channel, us);
 }
 
 void applyPose(const LegPose &p) {
-  writeJoint(coxa, p.coxa, COXA_OFFSET);
-  writeJoint(femur, p.femur, FEMUR_OFFSET);
-  writeJoint(tibia, p.tibia, TIBIA_OFFSET);
+  writeJoint(COXA_CH, p.coxa, COXA_OFFSET);
+  writeJoint(FEMUR_CH, p.femur, FEMUR_OFFSET);
+  writeJoint(TIBIA_CH, p.tibia, TIBIA_OFFSET);
 }
 
 LegPose lerpPose(const LegPose &a, const LegPose &b, float t) {
@@ -120,9 +129,12 @@ void runGaitCycle() {
 
 void setup() {
   Serial.begin(9600);
-  coxa.attach(COXA_PIN, SERVO_MIN_US, SERVO_MAX_US);
-  femur.attach(FEMUR_PIN, SERVO_MIN_US, SERVO_MAX_US);
-  tibia.attach(TIBIA_PIN, SERVO_MIN_US, SERVO_MAX_US);
+  pwm.begin();
+  pwm.setOscillatorFrequency(PCA_OSC_HZ);
+  pwm.setPWMFreq(SERVO_FREQ_HZ);
+  Wire.setClock(400000);
+  // PCA9685 channels emit no pulses until first written, so this first
+  // applyPose() is the first thing the servos see — no uncommanded jump.
   applyPose(GROUND_BACK);
   Serial.println("Leg ready. Press 'r' in the Serial Monitor and hit Enter to run a gait cycle.");
 }

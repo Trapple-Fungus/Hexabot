@@ -2,7 +2,7 @@
 
 A 3D-printed hexapod robot: hexagonal body with 6 radially mounted legs
 (60° apart), 3 servos per leg (coxa/femur/tibia), 18 servos total, driven
-by an ELEGOO UNO R3.
+by an ELEGOO UNO R3 through a PCA9685 16-channel PWM driver.
 
 ## Hardware
 
@@ -15,33 +15,88 @@ by an ELEGOO UNO R3.
 - **Stance**: spider-like inverted-V — hip up to the knee (femur ~+35°
   above horizontal), then steeply down to the foot (tibia ~−65° off the
   femur line), foot landing outboard of the body.
-- **Controller**: ELEGOO UNO R3 (Arduino Uno clone).
+- **Controller**: ELEGOO UNO R3 (Arduino Uno clone) + PCA9685 16-channel
+  I2C PWM servo driver (address 0x40).
 
 Left-side legs are mirror images of right-side legs; the code handles this
 with a per-leg direction-sign table.
 
+## Servo channel map
+
+The PCA9685 has 16 channels but the robot has 18 servos, so 5 legs live on
+the board (one leg per 3 consecutive channels) and the left rear leg runs
+directly off Uno pins D9/D10/D11.
+
+| PCA9685 channel | Leg | Joint |
+|---|---|---|
+| CH 0 | Right front (RF) | Coxa |
+| CH 1 | Right front (RF) | Femur |
+| CH 2 | Right front (RF) | Tibia |
+| CH 3 | Right mid (RM) | Coxa |
+| CH 4 | Right mid (RM) | Femur |
+| CH 5 | Right mid (RM) | Tibia |
+| CH 6 | Right rear (RR) | Coxa |
+| CH 7 | Right rear (RR) | Femur |
+| CH 8 | Right rear (RR) | Tibia |
+| CH 9 | Left front (LF) | Coxa |
+| CH 10 | Left front (LF) | Femur |
+| CH 11 | Left front (LF) | Tibia |
+| CH 12 | Left mid (LM) | Coxa |
+| CH 13 | Left mid (LM) | Femur |
+| CH 14 | Left mid (LM) | Tibia |
+| CH 15 | — | Spare |
+
+| Uno pin | Leg | Joint |
+|---|---|---|
+| D9 | Left rear (LR) | Coxa |
+| D10 | Left rear (LR) | Femur |
+| D11 | Left rear (LR) | Tibia |
+
+### PCA9685 ↔ Uno wiring
+
+| PCA9685 pin | Connects to |
+|---|---|
+| VCC | Uno 5V (logic power only) |
+| GND | Uno GND |
+| SDA | Uno A4 |
+| SCL | Uno A5 |
+| V+ (screw terminal) | External 5–6.8 V high-current servo supply **+** |
+| GND (screw terminal) | External servo supply **−** (shares ground with the Uno) |
+
+**Never** power the servos from the Uno's 5V pin or USB — see Power below.
+
 ## Sketches
+
+Both sketches need the **Adafruit PWM Servo Driver Library** (Arduino IDE →
+Library Manager → search "Adafruit PWM Servo Driver").
 
 | Sketch | Purpose |
 |--------|---------|
 | [`Hexapod/`](Hexapod/) | **The main sketch.** Full 6-leg framework: neutral standing pose on boot, tripod-gait walking (forward / backward / crab left-right / turn in place) driven over Serial, plus a live per-joint calibration UI. See its README for controls, gait math, and tuning. |
-| [`RightFrontLeg/`](RightFrontLeg/) | Original single-leg test: drives one leg (pins 9/10/11) through a Bezier-curve triangular step cycle, one cycle per `r` over Serial. Kept as a standalone testbed for a freshly built leg. |
+| [`RightFrontLeg/`](RightFrontLeg/) | Original single-leg test: drives one leg (PCA9685 channels 0/1/2) through a Bezier-curve triangular step cycle, one cycle per `r` over Serial. Kept as a standalone testbed for a freshly built leg. |
 
-Both sketches drive the 270° servos with `writeMicroseconds()` over a
-500–2500 µs range, because Arduino's `Servo::write()` clamps to 0–180° and
-can't reach the servos' full travel.
+Both sketches drive the 270° servos with 500–2500 µs pulses via
+`writeMicroseconds()` (the PCA9685's, or `Servo.h`'s for the three Uno-pin
+joints), because degree-based `write()` APIs clamp to 0–180° and can't reach
+the servos' full travel.
 
 ## Build status
 
-One leg (right front) is assembled and wired to pins D9/D10/D11. The
+One leg (right front) is assembled; it plugs into PCA9685 channels 0–2. The
 `Hexapod` sketch ships with only that leg enabled; flip each leg's
 `enabled` flag in its config table as it gets built.
 
-## Known constraints for the full robot
+## Power — read this before wiring
 
-1. **Servo count**: Arduino's `Servo.h` supports at most 12 servos on an
-   Uno — the full 18 needs a PCA9685 16-channel PWM driver board (planned;
-   the code isolates this behind a single `ServoBackend` class) or a Mega.
-2. **Power**: 18× 20 kg servos draw well over 10 A under load. USB / the
-   Uno's 5V pin cannot power them — a dedicated 5–6.8 V high-current supply
-   on the servo rails (grounds common with the Uno) is required.
+18× 20 kg servos draw well over 10 A under load. USB / the Uno's 5V pin
+cannot power them:
+
+- Feed a dedicated 5–6.8 V high-current supply into the PCA9685's V+ screw
+  terminal, with grounds common to the Uno.
+- The PCA9685 board's terminal block and traces are only rated for roughly
+  5–10 A total. For the full 18-servo robot, don't run all servo current
+  through the little board — distribute power (e.g., a separate heavy-gauge
+  5–6.8 V bus bar feeding the servo +/− wires, with only signal pins going
+  to the PCA9685) or at minimum solder heavier feed wires to the rail.
+- Put a large electrolytic capacitor (1000 µF+) across the servo rail to
+  absorb start-up surges.

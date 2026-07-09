@@ -13,16 +13,25 @@ in and out instead of snapping between positions.
 - 3D-printed black leg assembly with a triangular truss link at the top.
 - Two Miuzei 20kg digital servos (4.8V–6.8V) in series for the femur/tibia joints,
   plus a third servo for the coxa (hip rotation).
-- ELEGOO UNO R3 (Arduino Uno clone) driving the servos, powered via USB.
-- Servos wired to the Uno's digital pins; loose jumper wires for power/signal.
+- ELEGOO UNO R3 (Arduino Uno clone) + PCA9685 16-channel I2C PWM driver
+  (VCC→5V, GND→GND, SDA→A4, SCL→A5, default address 0x40).
+- Servo power comes from an external 5–6.8 V supply on the PCA9685's V+
+  screw terminal (ground common with the Uno) — not from USB or the Uno's
+  5V pin.
+- Needs the **Adafruit PWM Servo Driver Library** (Arduino IDE → Library
+  Manager).
 
-## Pin assignment
+## Channel assignment
 
-| Joint | Arduino pin |
-|-------|-------------|
-| Coxa  | D9          |
-| Femur | D10         |
-| Tibia | D11         |
+The test channels match the RF leg's slots in the full Hexapod sketch, so a
+freshly built leg plugs straight into the board. Change the `*_CH` constants
+at the top of the sketch to test a leg on other channels.
+
+| Joint | PCA9685 channel |
+|-------|-----------------|
+| Coxa  | CH0             |
+| Femur | CH1             |
+| Tibia | CH2             |
 
 ## Degree convention (logical angles used in the code)
 
@@ -55,18 +64,20 @@ If, say, your femur servo's true "vertical down" position is actually
 real resting pose, before touching anything else — the trajectory math always
 works purely in logical angles.
 
-### Why `writeMicroseconds` instead of `servo.write()`
+### Why microsecond pulses instead of degree APIs
 
-These are 270° servos, but Arduino's `Servo::write()` always clamps its input
-to 0–180° before mapping it to a pulse width — it physically cannot reach past
-180° no matter what you pass it. To use the full sweep, logical degrees
+These are 270° servos, but degree-based servo APIs clamp their input to
+0–180° before mapping it to a pulse width — they physically cannot reach past
+180° no matter what you pass them. To use the full sweep, logical degrees
 (0–270, `SERVO_MAX_DEG`) are mapped straight to a pulse width in microseconds
-and sent with `writeMicroseconds()` instead. `SERVO_MIN_US`/`SERVO_MAX_US`
-(default `500`/`2500`) are typical for 270° hobby servos but aren't guaranteed
-for your exact model — if a servo buzzes, stalls, or stops short of where you
-told it to go, narrow this range and re-check against the datasheet. The same
-range is also passed to each `servo.attach(pin, min, max)` call so the pulse
-values aren't clipped back down to the library's narrower default.
+and sent with `pwm.writeMicroseconds(channel, us)` on the PCA9685.
+`SERVO_MIN_US`/`SERVO_MAX_US` (default `500`/`2500`) are typical for 270°
+hobby servos but aren't guaranteed for your exact model — if a servo buzzes,
+stalls, or stops short of where you told it to go, narrow this range and
+re-check against the datasheet. If all servos are consistently off by the
+same proportion, the PCA9685's internal oscillator (nominally 27 MHz, but it
+varies board to board) is the culprit — trim `PCA_OSC_HZ` at the top of the
+sketch.
 
 ## How the motion works
 
@@ -149,5 +160,6 @@ character is ignored. This is handled in `loop()` by `Serial.available()` /
 Full hexapod walking is implemented in [`../Hexapod/`](../Hexapod/): the same
 swing/stance approach runs on all 6 legs with two tripod groups (RF/RR/LM and
 RM/LF/LR) 180° out of phase — one tripod swings while the other pushes, then
-they swap. Once a new leg passes its solo test with this sketch, wire it to its
-pins from the Hexapod README's pin table and flip its `enabled` flag there.
+they swap. Once a new leg passes its solo test with this sketch, plug it into
+its PCA9685 channels from the Hexapod README's channel table and flip its
+`enabled` flag there.

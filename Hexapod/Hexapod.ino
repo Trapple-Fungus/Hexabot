@@ -1,4 +1,6 @@
-#include <Servo.h>
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>  // Adafruit PWM Servo Driver Library
+#include <Servo.h>                    // fallback for the LR leg on Uno pins
 
 // ============================================================
 // Hexapod: 6 legs x 3 joints (coxa/femur/tibia), 18 servos.
@@ -15,11 +17,13 @@
 // while the other pushes on the ground, then they swap. The
 // body is always supported by a stable 3-point triangle.
 //
-// Servo backend note: Arduino's Servo.h tops out at 12 channels
-// on an Uno (single 16-bit timer), so this sketch can drive at
-// most 12 of the 18 joints at once. All pulse output funnels
-// through the ServoBackend class so an 18-channel driver
-// (PCA9685) or a Mega can replace it by editing only that class.
+// Servo backend: a PCA9685 16-channel I2C PWM driver (SDA=A4,
+// SCL=A5, address 0x40) carries 15 of the 18 joints — one leg
+// per 3 consecutive channels, CH0-CH14. The 18th-16th joint
+// overflow (the whole LR leg) runs on Uno pins D9-D11 via
+// Servo.h. All pulse output funnels through the ServoBackend
+// class, so different hardware (a second PCA9685, a Mega) only
+// touches that class.
 // ============================================================
 
 // ---- 270-degree servo pulse range ----
@@ -31,6 +35,12 @@ const int SERVO_MIN_US     = 500;
 const int SERVO_MAX_US     = 2500;
 const int SERVO_MAX_DEG    = 270;
 const int SERVO_CENTER_DEG = 135;  // logical 0 deg maps here
+
+// ---- PCA9685 setup ----
+const int      SERVO_FREQ_HZ = 50;        // standard 20 ms servo frame
+const uint32_t PCA_OSC_HZ    = 27000000;  // nominal internal oscillator — it
+                                          // varies board to board, so trim this
+                                          // if measured pulses run long/short
 
 const int NUM_LEGS   = 6;
 const int NUM_JOINTS = 3;
@@ -62,7 +72,8 @@ const LegPose NEUTRAL = { 0, 35, -65 };
 // tune it with the serial UI below, then copy the printed values back
 // into this table so they persist across uploads.
 struct JointConfig {
-  uint8_t pin;
+  uint8_t channel;    // PCA9685 channel (0-15), or Uno pin when onUno is set
+  bool    onUno;      // 18 joints > 16 channels: the LR leg lives on Uno pins
   int8_t  sign;       // +1 or -1
   int16_t offsetDeg;
 };
@@ -73,14 +84,17 @@ struct LegConfig {
   JointConfig joint[NUM_JOINTS];
 };
 
+// One leg per 3 consecutive PCA9685 channels; CH15 is spare. The LR
+// leg overflows the 16-channel board onto Uno pins D9/D10/D11 (the
+// same pins the original single-leg build used, so old wiring fits).
 LegConfig legs[NUM_LEGS] = {
-  // name  enabled   coxa          femur         tibia
-  { "RF",  true,  {{ 9, +1, 0}, {10, +1, 0}, {11, +1, 0}} },
-  { "RM",  false, {{ 2, +1, 0}, { 3, +1, 0}, { 4, +1, 0}} },
-  { "RR",  false, {{ 5, +1, 0}, { 6, +1, 0}, { 7, +1, 0}} },
-  { "LF",  false, {{ 8, -1, 0}, {12, -1, 0}, {13, -1, 0}} },
-  { "LM",  false, {{A0, -1, 0}, {A1, -1, 0}, {A2, -1, 0}} },
-  { "LR",  false, {{A3, -1, 0}, {A4, -1, 0}, {A5, -1, 0}} },
+  // name  enabled   coxa                 femur                tibia
+  { "RF",  true,  {{ 0, false, +1, 0}, { 1, false, +1, 0}, { 2, false, +1, 0}} },
+  { "RM",  false, {{ 3, false, +1, 0}, { 4, false, +1, 0}, { 5, false, +1, 0}} },
+  { "RR",  false, {{ 6, false, +1, 0}, { 7, false, +1, 0}, { 8, false, +1, 0}} },
+  { "LF",  false, {{ 9, false, -1, 0}, {10, false, -1, 0}, {11, false, -1, 0}} },
+  { "LM",  false, {{12, false, -1, 0}, {13, false, -1, 0}, {14, false, -1, 0}} },
+  { "LR",  false, {{ 9, true,  -1, 0}, {10, true,  -1, 0}, {11, true,  -1, 0}} },
 };
 
 // Tripod A = RF, RR, LM (legs 0, 2, 4) — 2 right + 1 left.
@@ -128,39 +142,53 @@ float strideFactor(Motion m, uint8_t li) {
 }
 
 // ---- Servo backend ----
-// The single swap point for the 18-channel hardware decision: replace
-// the body of these three methods with PCA9685 calls (or recompile for
-// a Mega and raise MAX_CHANNELS) and nothing above this layer changes.
+// The single swap point for the servo hardware: PCA9685 channels for
+// most joints, a small Servo.h pool for the Uno-pin overflow (LR leg).
+// A second PCA9685 or a Mega would only change the code in this class.
 class ServoBackend {
 public:
   void begin() {
+    pwm.begin();
+    pwm.setOscillatorFrequency(PCA_OSC_HZ);
+    pwm.setPWMFreq(SERVO_FREQ_HZ);
+    Wire.setClock(400000);  // 15 I2C writes per gait step; 100 kHz is too slow
     for (int l = 0; l < NUM_LEGS; l++)
       for (int j = 0; j < NUM_JOINTS; j++)
-        handle[l][j] = -1;
-    used = 0;
+        unoHandle[l][j] = -1;
+    unoUsed = 0;
   }
 
-  // Writes initialUs before attaching so the servo's very first pulse
-  // is the target pose instead of an uncommanded jump.
-  bool attach(uint8_t leg, uint8_t j, uint8_t pin, int initialUs) {
-    if (used >= MAX_CHANNELS) return false;
-    handle[leg][j] = used;
-    pool[used].writeMicroseconds(initialUs);
-    pool[used].attach(pin, SERVO_MIN_US, SERVO_MAX_US);
-    used++;
+  // The first pulse a servo ever sees is the target pose, not an
+  // uncommanded jump: PCA9685 channels are silent until first written,
+  // and Uno-pin servos get writeMicroseconds() before attach().
+  bool attach(uint8_t leg, uint8_t j, const JointConfig &jc, int initialUs) {
+    if (!jc.onUno) {
+      pwm.writeMicroseconds(jc.channel, initialUs);
+      return true;
+    }
+    if (unoUsed >= MAX_UNO_SERVOS) return false;
+    unoHandle[leg][j] = unoUsed;
+    unoPool[unoUsed].writeMicroseconds(initialUs);
+    unoPool[unoUsed].attach(jc.channel, SERVO_MIN_US, SERVO_MAX_US);
+    unoUsed++;
     return true;
   }
 
-  void writeUs(uint8_t leg, uint8_t j, int us) {
-    int8_t h = handle[leg][j];
-    if (h >= 0) pool[h].writeMicroseconds(us);
+  void writeUs(uint8_t leg, uint8_t j, const JointConfig &jc, int us) {
+    if (!jc.onUno) {
+      pwm.writeMicroseconds(jc.channel, us);
+      return;
+    }
+    int8_t h = unoHandle[leg][j];
+    if (h >= 0) unoPool[h].writeMicroseconds(us);
   }
 
 private:
-  static const uint8_t MAX_CHANNELS = 12;  // Servo.h limit on the Uno
-  Servo   pool[MAX_CHANNELS];
-  int8_t  handle[NUM_LEGS][NUM_JOINTS];
-  uint8_t used;
+  Adafruit_PWMServoDriver pwm;             // default I2C address 0x40
+  static const uint8_t MAX_UNO_SERVOS = 3; // just the LR leg overflow
+  Servo   unoPool[MAX_UNO_SERVOS];
+  int8_t  unoHandle[NUM_LEGS][NUM_JOINTS];
+  uint8_t unoUsed;
 };
 
 ServoBackend backend;
@@ -175,9 +203,9 @@ int jointToUs(const JointConfig &jc, float logicalDeg) {
 void applyLegPose(uint8_t li, const LegPose &p) {
   currentPose[li] = p;
   if (!legs[li].enabled) return;
-  backend.writeUs(li, COXA,  jointToUs(legs[li].joint[COXA],  p.coxa));
-  backend.writeUs(li, FEMUR, jointToUs(legs[li].joint[FEMUR], p.femur));
-  backend.writeUs(li, TIBIA, jointToUs(legs[li].joint[TIBIA], p.tibia));
+  backend.writeUs(li, COXA,  legs[li].joint[COXA],  jointToUs(legs[li].joint[COXA],  p.coxa));
+  backend.writeUs(li, FEMUR, legs[li].joint[FEMUR], jointToUs(legs[li].joint[FEMUR], p.femur));
+  backend.writeUs(li, TIBIA, legs[li].joint[TIBIA], jointToUs(legs[li].joint[TIBIA], p.tibia));
 }
 
 void applyAllLegs(const LegPose &p) {
@@ -341,19 +369,19 @@ void setup() {
     for (uint8_t j = 0; j < NUM_JOINTS; j++) {
       int us = jointToUs(legs[li].joint[j], j == COXA ? NEUTRAL.coxa
                        : j == FEMUR ? NEUTRAL.femur : NEUTRAL.tibia);
-      if (backend.attach(li, j, legs[li].joint[j].pin, us)) attached++;
+      if (backend.attach(li, j, legs[li].joint[j], us)) attached++;
       else skipped++;
     }
   }
 
-  Serial.print(F("Hexapod ready. Joints attached: "));
+  Serial.print(F("Hexapod ready (PCA9685 + Uno pins). Joints attached: "));
   Serial.println(attached);
   if (skipped > 0) {
     Serial.print(F("WARNING: "));
     Serial.print(skipped);
-    Serial.println(F(" joints skipped — Servo.h supports only 12 channels"));
-    Serial.println(F("on the Uno. An 18-channel driver (PCA9685) or a Mega"));
-    Serial.println(F("is needed for the full robot."));
+    Serial.println(F(" joints skipped — more Uno-pin joints in legs[]"));
+    Serial.println(F("than the Servo.h fallback pool holds (3). Move"));
+    Serial.println(F("them onto PCA9685 channels or raise MAX_UNO_SERVOS."));
   }
   printHelp();
 }

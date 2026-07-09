@@ -6,19 +6,27 @@ pose from the reference photo and holds it. Serial commands then walk the
 robot **forward, backward, sideways (crab), or turn in place** using a tripod
 gait, and a calibration UI lets you tune each joint's mechanical offset live.
 
-## ⚠ Hardware limits you must know about
+## Hardware setup
 
-1. **Servo.h maxes out at 12 channels on the Uno.** The sketch compiles and
-   runs, but can only physically drive 12 of the 18 joints at once. Joints
-   past the limit are skipped with a warning at boot. For the full robot you
-   need either a PCA9685 16-channel I2C driver board (+2 joints on Uno pins,
-   or a second PCA9685) or an Arduino Mega. All pulse output goes through the
-   `ServoBackend` class — that is the **single swap point** when the hardware
-   is chosen; nothing above it changes.
-2. **Power.** 18× 20 kg-class servos can pull well over 10 A under load. USB
-   and the Uno's 5V pin cannot supply this — even a few servos will brown-out
-   the board. Use a dedicated 5–6.8 V high-current supply wired directly to
-   the servo power rails, with grounds common to the Uno.
+The servos are driven by a **PCA9685 16-channel I2C PWM board** (default
+address 0x40) wired to the Uno: VCC→5V, GND→GND, SDA→A4, SCL→A5. Since the
+robot has 18 servos and the board 16 channels, five legs sit on PCA9685
+channels 0–14 (one leg per 3 consecutive channels, CH15 spare) and the LR
+leg runs on Uno pins D9–D11 through `Servo.h`. All pulse output goes through
+the `ServoBackend` class — that is the **single swap point** if the hardware
+changes (second PCA9685, Mega); nothing above it changes.
+
+The sketch needs the **Adafruit PWM Servo Driver Library** (Arduino IDE →
+Library Manager → search "Adafruit PWM Servo Driver").
+
+### ⚠ Power
+
+18× 20 kg-class servos can pull well over 10 A under load. USB and the Uno's
+5V pin cannot supply this — even a few servos will brown-out the board. Feed
+a dedicated 5–6.8 V high-current supply into the PCA9685's V+ screw terminal
+(grounds common to the Uno), and for the full robot distribute the servo
+current instead of running it all through the board's ~5–10 A-rated terminal
+block and traces — see the power section of the [main README](../README.md).
 
 ## Serial controls (9600 baud, single characters)
 
@@ -101,22 +109,24 @@ same rotational sense, which is opposite signs on opposite sides.
 | `GAIT_STEPS` | 30 | Interpolation steps per half-cycle — smoothness |
 | `STEP_MS` | 15 | ms per step — overall speed (half-cycle ≈ 450 ms) |
 
-## Leg layout and pins
+## Leg layout and channels
 
 Left legs are mirror images of right legs, handled by the `sign` field (−1)
-in the config table.
+in the config table. Each leg occupies 3 consecutive PCA9685 channels; the
+LR leg overflows the 16-channel board onto Uno pins.
 
 | # | Leg | Coxa | Femur | Tibia | Tripod | Enabled by default |
 |---|-----|------|-------|-------|--------|--------------------|
-| 0 | RF (right front) | D9 | D10 | D11 | A | ✅ (matches the single-leg build) |
-| 1 | RM (right mid)   | D2 | D3  | D4  | B | ❌ |
-| 2 | RR (right rear)  | D5 | D6  | D7  | A | ❌ |
-| 3 | LF (left front)  | D8 | D12 | D13 | B | ❌ |
-| 4 | LM (left mid)    | A0 | A1  | A2  | A | ❌ |
-| 5 | LR (left rear)   | A3 | A4  | A5  | B | ❌ |
+| 0 | RF (right front) | CH0 | CH1  | CH2  | A | ✅ (the built leg) |
+| 1 | RM (right mid)   | CH3 | CH4  | CH5  | B | ❌ |
+| 2 | RR (right rear)  | CH6 | CH7  | CH8  | A | ❌ |
+| 3 | LF (left front)  | CH9 | CH10 | CH11 | B | ❌ |
+| 4 | LM (left mid)    | CH12 | CH13 | CH14 | A | ❌ |
+| 5 | LR (left rear)   | Uno D9 | Uno D10 | Uno D11 | B | ❌ |
 
-As you build each leg, wire it to its pins and flip its `enabled` flag to
-`true` in `legs[]`. (Analog pins A0–A5 work fine as digital servo outputs.)
+CH15 is spare. As you build each leg, plug it into its channels and flip its
+`enabled` flag to `true` in `legs[]`. The full channel-by-channel table and
+the PCA9685↔Uno wiring are in the [main README](../README.md).
 
 ## Logical angle convention
 
@@ -136,9 +146,10 @@ const LegPose NEUTRAL = { 0, 35, -65 };  // coxa, femur, tibia
 ```
 
 Mapping to a servo: `servoDeg = 135 + sign × logicalDeg + offsetDeg`, then
-converted to a 500–2500 µs pulse across 270° and sent with
-`writeMicroseconds()` (Servo's `write()` clamps to 180° and can't use these
-servos' full range).
+converted to a 500–2500 µs pulse across 270° and sent as microseconds to
+the PCA9685 (or via `Servo.writeMicroseconds()` for the LR leg's Uno pins) —
+degree-based `write()` APIs clamp to 180° and can't use these servos' full
+range.
 
 ## Bring-up order
 
@@ -146,8 +157,9 @@ servos' full range).
 2. Send `w` and watch RF step through the gait in the air — sanity-check the
    swing direction and foot clearance before other legs exist.
 3. Build and enable the remaining legs one at a time, calibrating each.
-4. Pick the 18-channel hardware (PCA9685 recommended) and swap the
-   `ServoBackend` internals — until then Servo.h silently caps you at 12
-   joints (4 legs).
+4. Before enabling more than a couple of legs, sort out servo power: a
+   dedicated 5–6.8 V high-current supply on the PCA9685's V+ terminal, and
+   distributed power wiring for the full 18-servo load (see the main
+   README's power section).
 5. First full-robot walk: prop the body on a box so the feet hang free, run
    each motion, and only then put it on the ground.
