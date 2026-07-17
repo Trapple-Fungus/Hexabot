@@ -103,11 +103,11 @@ struct LegConfig {
 LegConfig legs[NUM_LEGS] = {
   // name  enabled   coxa                 femur                tibia
   { "RF",  true,  {{ 0, false, +1, 0}, { 1, false, +1, 0}, { 2, false, +1, 0}} },
-  { "RM",  false, {{ 3, false, +1, 0}, { 4, false, +1, 0}, { 5, false, +1, 0}} },
-  { "RR",  false, {{ 6, false, +1, 0}, { 7, false, +1, 0}, { 8, false, +1, 0}} },
-  { "LF",  false, {{ 9, false, -1, 0}, {10, false, -1, 0}, {11, false, -1, 0}} },
-  { "LM",  false, {{12, false, -1, 0}, {13, false, -1, 0}, {14, false, -1, 0}} },
-  { "LR",  false, {{ 9, true,  -1, 0}, {10, true,  -1, 0}, {11, true,  -1, 0}} },
+  { "RM",  true,  {{ 3, false, +1, 0}, { 4, false, +1, 0}, { 5, false, +1, 0}} },
+  { "RR",  true,  {{ 6, false, +1, 0}, { 7, false, +1, 0}, { 8, false, +1, 0}} },
+  { "LF",  true,  {{ 9, false, -1, 0}, {10, false, -1, 0}, {11, false, -1, 0}} },
+  { "LM",  true,  {{12, false, -1, 0}, {13, false, -1, 0}, {14, false, -1, 0}} },
+  { "LR",  true,  {{ 9, true,  -1, 0}, {10, true,  -1, 0}, {11, true,  -1, 0}} },
 };
 
 // Tripod A = RF, RR, LM (legs 0, 2, 4) — 2 right + 1 left.
@@ -326,6 +326,8 @@ void returnToNeutral() {
 //   0-5      select leg (0=RF 1=RM 2=RR 3=LF 4=LM 5=LR)
 //   c f t    select joint on the selected leg
 //   + -      nudge the selected joint's offset by +/-2 deg (moves live)
+//   < >      coarse nudge by +/-10 deg (for large horn-mount offsets)
+//   j        wiggle the selected joint to identify it physically
 //   n        re-apply the neutral stance to all enabled legs
 //   p        print the offset table (copy values back into legs[])
 //   h        print this help
@@ -339,8 +341,8 @@ const char* jointName(uint8_t j) {
 void printHelp() {
   Serial.println(F("Motion:  w fwd | s back | a crab left | d crab right"));
   Serial.println(F("         q turn left | e turn right | x stop"));
-  Serial.println(F("Calibrate: 0-5 leg | c/f/t joint | +/- nudge 2deg"));
-  Serial.println(F("           n neutral | p print offsets | h help"));
+  Serial.println(F("Calibrate: 0-5 leg | c/f/t joint | +/- nudge 2deg | </> 10deg"));
+  Serial.println(F("           j wiggle joint | n neutral | p print offsets | h help"));
 }
 
 void printSelection() {
@@ -370,6 +372,27 @@ void nudgeOffset(int delta) {
   printSelection();
 }
 
+// Wiggles the selected joint +/-15 deg for a couple of seconds, then
+// settles back — the quick way to check that each servo is plugged into
+// the channel the legs[] table says it is.
+void wiggleJoint() {
+  printSelection();
+  LegPose base = currentPose[selLeg];
+  const int steps = 20;
+  for (int cycle = 0; cycle < 3; cycle++) {
+    for (int i = 0; i <= steps; i++) {
+      float wave = 15.0f * sin(2 * PI * i / steps);
+      LegPose p = base;
+      if      (selJoint == COXA)  p.coxa  += wave;
+      else if (selJoint == FEMUR) p.femur += wave;
+      else                        p.tibia += wave;
+      applyLegPose(selLeg, p);
+      delay(STEP_MS * 2);
+    }
+  }
+  applyLegPose(selLeg, base);
+}
+
 void setMotion(Motion m, const __FlashStringHelper* name) {
   motion = m;
   Serial.print(F("Motion: "));
@@ -392,6 +415,9 @@ void handleCommand(char c) {
   else if (c == 't' || c == 'T') { selJoint = TIBIA; printSelection(); }
   else if (c == '+') { nudgeOffset(+2); }
   else if (c == '-') { nudgeOffset(-2); }
+  else if (c == '>') { nudgeOffset(+10); }
+  else if (c == '<') { nudgeOffset(-10); }
+  else if (c == 'j' || c == 'J') { wiggleJoint(); }
   else if (c == 'n' || c == 'N') {
     applyAllLegs(NEUTRAL);
     Serial.println(F("Neutral stance applied."));
@@ -417,6 +443,10 @@ void setup() {
     }
   }
 
+  // Build tag: bump this whenever the sketch changes, so a stale upload
+  // (e.g. the IDE compiling an old buffer) is obvious in the Serial
+  // Monitor without counting joints.
+  Serial.println(F("Hexapod fw build 2 (all 6 legs enabled)"));
   Serial.print(F("Hexapod ready (PCA9685 + Uno pins). Joints attached: "));
   Serial.println(attached);
   if (skipped > 0) {
