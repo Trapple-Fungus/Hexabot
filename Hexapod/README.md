@@ -123,9 +123,12 @@ axis-to-axis, tibia+foot ~140 mm, hip ~113 mm from body center → foot
 
 ## Leg layout and channels
 
-Left legs are mirror images of right legs, handled by the `sign` field (−1)
-in the config table. Each leg occupies 3 consecutive PCA9685 channels; the
-LR leg overflows the 16-channel board onto Uno pins.
+The six legs are identical printed assemblies mounted radially — rotated
+around the body, not mirrored. So femur/tibia rotate the same physical way
+on both sides (`sign = +1` everywhere) and only the **coxa** direction flips
+on the left (`sign = −1`), because "sweep toward the front" reverses when
+the leg points the other way. Each leg occupies 3 consecutive PCA9685
+channels; the LR leg overflows the 16-channel board onto Uno pins.
 
 | # | Leg | Coxa | Femur | Tibia | Tripod | Enabled by default |
 |---|-----|------|-------|-------|--------|--------------------|
@@ -172,20 +175,21 @@ All poses are written in body-frame logical degrees; the per-leg `sign` and
   the foot down toward the ground.
 
 The neutral stance (knee up, foot below and outboard), sized against the
-measured leg segments:
+measured leg segments for a **3 in (76 mm) belly clearance**:
 
 ```cpp
-const LegPose NEUTRAL = { 0, 30, -90 };  // coxa, femur, tibia
+const LegPose NEUTRAL = { 0, 15, -90 };  // coxa, femur, tibia
 ```
 
-With femur ≈ 105 mm and tibia+foot ≈ 140 mm this puts the foot ~161 mm
-outboard of the hip and **~69 mm below the femur axis** — actual ground
-clearance for the 65 mm-tall body. The earlier photo-eyeballed pose
-`{0, 35, −65}` computes to the foot ~10 mm *above* the hip axis with these
-segment lengths, i.e. the belly would rest on the floor. If the physical
-robot stands too low or too tall, adjust `NEUTRAL`'s tibia angle first
-(steeper = taller) and re-check each servo's `offsetDeg` with the
-calibration UI.
+With femur ≈ 105 mm and tibia+foot ≈ 140 mm this puts the foot ~138 mm
+outboard of the hip and **~108 mm below the femur axis**; with the femur
+axis at the 65 mm body's mid-height, the body plate rides ~76 mm ≈ 3 in
+off the ground. (The previous `{0, 30, −90}` stance stood ~36 mm.)
+
+Calibrate the offsets first, then measure the real standing height —
+the trim knob is the femur angle: **1° less femur ≈ 2.4 mm taller**, and
+vice versa. The tibia angle changes height much more slowly (~0.6 mm/°)
+at this pose, so leave it at −90 unless the stance width needs changing.
 
 Mapping to a servo: `servoDeg = 135 + sign × logicalDeg + offsetDeg`, then
 converted to a 500–2500 µs pulse across 270° and sent as microseconds to

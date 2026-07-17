@@ -69,18 +69,25 @@ struct LegPose {
 };
 
 // Standing pose, sized against the measured leg (femur ~105 mm axis to
-// axis, tibia+foot ~140 mm): knee up at +30 deg, tibia -90 deg off the
-// femur line. That puts the foot ~161 mm outboard of the hip and ~69 mm
-// below the femur axis — real ground clearance for the 65 mm-tall body.
-// (The old photo-eyeballed pose {0,35,-65} computes to the foot ~10 mm
-// ABOVE the hip axis with these segment lengths — belly on the floor.)
-// Verify against the physical leg and trim with the calibration UI.
-const LegPose NEUTRAL = { 0, 30, -90 };
+// axis, tibia+foot ~140 mm) for a 3 in (76 mm) belly clearance: femur
+// +15 deg with the tibia -90 deg off the femur line puts the foot
+// ~138 mm outboard of the hip and ~108 mm below the femur axis. With
+// the femur axis at the 65 mm body's mid-height, the body plate rides
+// ~76 mm off the ground. (The previous {0,30,-90} stance was ~36 mm.)
+// Trim knob: 1 deg LESS femur = body ~2.4 mm HIGHER, and vice versa.
+// Measure the real standing height and trim, since both the horn
+// offsets and the hip-axis-height assumption move this number.
+const LegPose NEUTRAL = { 0, 15, -90 };
 
 // ---- Per-leg configuration ----
-// sign flips a joint's direction: left-side legs are mirror images of
-// right-side legs, so their femur/tibia (and coxa "toward front")
-// rotate the opposite way for the same logical angle.
+// sign flips a joint's direction. The six legs are identical printed
+// assemblies (the CAD has one variant of each part) bolted radially
+// around the body — rotated, not mirrored. Rotating a leg about the
+// body's vertical axis preserves "up", so femur/tibia rotate the same
+// way on both sides (+1 everywhere); only the coxa flips on the left,
+// because "sweep toward the front" reverses when the leg points the
+// other way. (Build 3 and earlier flipped all three joints on the
+// left, which drove left knees down whenever the right knees lifted.)
 // offsetDeg absorbs each individual servo's mechanical zero error —
 // tune it with the serial UI below, then copy the printed values back
 // into this table so they persist across uploads.
@@ -105,9 +112,9 @@ LegConfig legs[NUM_LEGS] = {
   { "RF",  true,  {{ 0, false, +1, 0}, { 1, false, +1, 0}, { 2, false, +1, 0}} },
   { "RM",  true,  {{ 3, false, +1, 0}, { 4, false, +1, 0}, { 5, false, +1, 0}} },
   { "RR",  true,  {{ 6, false, +1, 0}, { 7, false, +1, 0}, { 8, false, +1, 0}} },
-  { "LF",  true,  {{ 9, false, -1, 0}, {10, false, -1, 0}, {11, false, -1, 0}} },
-  { "LM",  true,  {{12, false, -1, 0}, {13, false, -1, 0}, {14, false, -1, 0}} },
-  { "LR",  true,  {{ 9, true,  -1, 0}, {10, true,  -1, 0}, {11, true,  -1, 0}} },
+  { "LF",  true,  {{ 9, false, -1, 0}, {10, false, +1, 0}, {11, false, +1, 0}} },
+  { "LM",  true,  {{12, false, -1, 0}, {13, false, +1, 0}, {14, false, +1, 0}} },
+  { "LR",  true,  {{ 9, true,  -1, 0}, {10, true,  +1, 0}, {11, true,  +1, 0}} },
 };
 
 // Tripod A = RF, RR, LM (legs 0, 2, 4) — 2 right + 1 left.
@@ -507,7 +514,7 @@ void setup() {
   // Build tag: bump this whenever the sketch changes, so a stale upload
   // (e.g. the IDE compiling an old buffer) is obvious in the Serial
   // Monitor without counting joints.
-  Serial.println(F("Hexapod fw build 3 (I2C scan + z joint scan + stop fix)"));
+  Serial.println(F("Hexapod fw build 5 (3in stance + coxa-only mirror)"));
   Serial.print(F("Hexapod ready (PCA9685 + Uno pins). Joints attached: "));
   Serial.println(attached);
   if (skipped > 0) {
