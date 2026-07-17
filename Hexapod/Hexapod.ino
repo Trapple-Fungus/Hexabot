@@ -343,6 +343,7 @@ void printHelp() {
   Serial.println(F("         q turn left | e turn right | x stop"));
   Serial.println(F("Calibrate: 0-5 leg | c/f/t joint | +/- nudge 2deg | </> 10deg"));
   Serial.println(F("           j wiggle joint | n neutral | p print offsets | h help"));
+  Serial.println(F("Diagnose:  z wiggle every joint in sequence (finds dead wiring)"));
 }
 
 void printSelection() {
@@ -372,25 +373,56 @@ void nudgeOffset(int delta) {
   printSelection();
 }
 
-// Wiggles the selected joint +/-15 deg for a couple of seconds, then
-// settles back — the quick way to check that each servo is plugged into
-// the channel the legs[] table says it is.
-void wiggleJoint() {
-  printSelection();
-  LegPose base = currentPose[selLeg];
+// Wiggles one joint +/-15 deg, then settles back — the quick way to
+// check that a servo is plugged into the channel the legs[] table says
+// it is.
+void wiggleOne(uint8_t li, uint8_t j, int cycles) {
+  LegPose base = currentPose[li];
   const int steps = 20;
-  for (int cycle = 0; cycle < 3; cycle++) {
+  for (int cycle = 0; cycle < cycles; cycle++) {
     for (int i = 0; i <= steps; i++) {
       float wave = 15.0f * sin(2 * PI * i / steps);
       LegPose p = base;
-      if      (selJoint == COXA)  p.coxa  += wave;
-      else if (selJoint == FEMUR) p.femur += wave;
-      else                        p.tibia += wave;
-      applyLegPose(selLeg, p);
+      if      (j == COXA)  p.coxa  += wave;
+      else if (j == FEMUR) p.femur += wave;
+      else                 p.tibia += wave;
+      applyLegPose(li, p);
       delay(STEP_MS * 2);
     }
   }
-  applyLegPose(selLeg, base);
+  applyLegPose(li, base);
+}
+
+void wiggleJoint() {
+  printSelection();
+  wiggleOne(selLeg, selJoint, 3);
+}
+
+// Wiggles every enabled joint in sequence, announcing each over Serial.
+// This is the first thing to run when legs aren't moving: a joint that
+// stays still here has a wiring/power/channel problem, not a gait
+// problem — the exact pulse the gait would send is being sent to it.
+void scanAllJoints() {
+  Serial.println(F("Joint scan — watch each named servo wiggle:"));
+  for (uint8_t li = 0; li < NUM_LEGS; li++) {
+    if (!legs[li].enabled) {
+      Serial.print(legs[li].name);
+      Serial.println(F(" skipped (disabled)"));
+      continue;
+    }
+    for (uint8_t j = 0; j < NUM_JOINTS; j++) {
+      const JointConfig &jc = legs[li].joint[j];
+      Serial.print(legs[li].name);
+      Serial.print(' ');
+      Serial.print(jointName(j));
+      Serial.print(jc.onUno ? F(" (Uno D") : F(" (CH"));
+      Serial.print(jc.channel);
+      Serial.println(')');
+      wiggleOne(li, j, 1);
+    }
+  }
+  Serial.println(F("Scan done. Any joint that stayed still: check its plug,"));
+  Serial.println(F("channel number, and servo power — the code did drive it."));
 }
 
 void setMotion(Motion m, const __FlashStringHelper* name) {
@@ -418,6 +450,7 @@ void handleCommand(char c) {
   else if (c == '>') { nudgeOffset(+10); }
   else if (c == '<') { nudgeOffset(-10); }
   else if (c == 'j' || c == 'J') { wiggleJoint(); }
+  else if (c == 'z' || c == 'Z') { scanAllJoints(); }
   else if (c == 'n' || c == 'N') {
     applyAllLegs(NEUTRAL);
     Serial.println(F("Neutral stance applied."));
@@ -427,9 +460,37 @@ void handleCommand(char c) {
   // anything else (newlines etc.) is ignored
 }
 
+// Reports every I2C device that acknowledges, so a missing or
+// mis-addressed PCA9685 shows up at boot instead of the sketch silently
+// writing pulses into nothing. Expected: 0x40 (the PCA9685) and 0x70
+// (its all-call address). A board strapped to another address (solder
+// jumpers A0-A5) shows up here too — that means 15 of the 18 joints are
+// being sent to an address nothing is listening on.
+void scanI2C() {
+  Serial.print(F("I2C scan:"));
+  bool pcaAt40 = false;
+  int found = 0;
+  for (uint8_t a = 8; a < 120; a++) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) {
+      Serial.print(F(" 0x"));
+      Serial.print(a, HEX);
+      if (a == 0x40) pcaAt40 = true;
+      found++;
+    }
+  }
+  if (found == 0) Serial.print(F(" nothing found"));
+  Serial.println();
+  if (!pcaAt40) {
+    Serial.println(F("WARNING: no PCA9685 at 0x40 — every PCA channel is dead."));
+    Serial.println(F("Check VCC/GND/SDA=A4/SCL=A5 and the address jumpers."));
+  }
+}
+
 void setup() {
   Serial.begin(9600);
   backend.begin();
+  scanI2C();
 
   int attached = 0, skipped = 0;
   for (uint8_t li = 0; li < NUM_LEGS; li++) {
@@ -446,7 +507,7 @@ void setup() {
   // Build tag: bump this whenever the sketch changes, so a stale upload
   // (e.g. the IDE compiling an old buffer) is obvious in the Serial
   // Monitor without counting joints.
-  Serial.println(F("Hexapod fw build 2 (all 6 legs enabled)"));
+  Serial.println(F("Hexapod fw build 3 (I2C scan + z joint scan + stop fix)"));
   Serial.print(F("Hexapod ready (PCA9685 + Uno pins). Joints attached: "));
   Serial.println(attached);
   if (skipped > 0) {
@@ -460,12 +521,23 @@ void setup() {
 }
 
 bool aSwings = true;  // which tripod swings on the next half-cycle
+bool settled = true;  // legs boot into the neutral stance
 
 void loop() {
   while (Serial.available() > 0)
     handleCommand(Serial.read());
 
-  if (motion == STOP) return;  // holding the current stance
+  if (motion == STOP) {
+    // Settle back to neutral exactly once after a stop. (Checking for
+    // STOP after runHalfCycle() never fired: commands are only read at
+    // the top of loop(), so the robot froze in its last gait posture.)
+    if (!settled) {
+      returnToNeutral();
+      settled = true;
+    }
+    return;
+  }
+  settled = false;
 
   // Latch the motion for this half-cycle so a direction change can't
   // yank the stride factors mid-air; new commands take effect at the
@@ -473,6 +545,4 @@ void loop() {
   Motion m = motion;
   runHalfCycle(aSwings, m);
   aSwings = !aSwings;
-
-  if (motion == STOP) returnToNeutral();
 }

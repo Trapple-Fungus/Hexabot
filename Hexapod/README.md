@@ -51,6 +51,9 @@ on the ground), so the robot never gets yanked mid-step.
 | `0`–`5` | Select leg (0=RF 1=RM 2=RR 3=LF 4=LM 5=LR) |
 | `c` / `f` / `t` | Select coxa / femur / tibia on the selected leg |
 | `+` / `-` | Nudge the selected joint's offset ±2° (servo moves immediately) |
+| `<` / `>` | Coarse nudge ±10° (for large horn-mount offsets) |
+| `j` | Wiggle the selected joint to identify it physically |
+| `z` | **Diagnostic scan**: wiggle every enabled joint in sequence, announcing each over Serial |
 | `n` | Re-apply the neutral stance to all enabled legs |
 | `p` | Print the full offset table |
 | `h` | Help |
@@ -126,16 +129,36 @@ LR leg overflows the 16-channel board onto Uno pins.
 
 | # | Leg | Coxa | Femur | Tibia | Tripod | Enabled by default |
 |---|-----|------|-------|-------|--------|--------------------|
-| 0 | RF (right front) | CH0 | CH1  | CH2  | A | ✅ (the built leg) |
-| 1 | RM (right mid)   | CH3 | CH4  | CH5  | B | ❌ |
-| 2 | RR (right rear)  | CH6 | CH7  | CH8  | A | ❌ |
-| 3 | LF (left front)  | CH9 | CH10 | CH11 | B | ❌ |
-| 4 | LM (left mid)    | CH12 | CH13 | CH14 | A | ❌ |
-| 5 | LR (left rear)   | Uno D9 | Uno D10 | Uno D11 | B | ❌ |
+| 0 | RF (right front) | CH0 | CH1  | CH2  | A | ✅ |
+| 1 | RM (right mid)   | CH3 | CH4  | CH5  | B | ✅ |
+| 2 | RR (right rear)  | CH6 | CH7  | CH8  | A | ✅ |
+| 3 | LF (left front)  | CH9 | CH10 | CH11 | B | ✅ |
+| 4 | LM (left mid)    | CH12 | CH13 | CH14 | A | ✅ |
+| 5 | LR (left rear)   | Uno D9 | Uno D10 | Uno D11 | B | ✅ |
 
-CH15 is spare. As you build each leg, plug it into its channels and flip its
-`enabled` flag to `true` in `legs[]`. The full channel-by-channel table and
-the PCA9685↔Uno wiring are in the [main README](../README.md).
+CH15 is spare. All six legs are enabled in `legs[]`; set a leg's `enabled`
+flag to `false` if it isn't built or wired yet. The full channel-by-channel
+table and the PCA9685↔Uno wiring are in the [main README](../README.md).
+
+## If some legs don't move
+
+The sketch sends pulses to **every enabled joint on every gait step** — a leg
+that never moves is a hardware problem, not a gait problem. Diagnose in this
+order:
+
+1. **Check the boot banner.** The Serial Monitor must say `Hexapod fw build 3`.
+   If it says `Leg ready. Press 'r'...` you are running the old single-leg
+   `RightFrontLeg.ino` test sketch — which only ever drives CH0–CH2. Upload
+   `Hexapod.ino` instead.
+2. **Check the boot I2C scan line.** It must list `0x40`. If it doesn't, the
+   PCA9685 is miswired or strapped to a different address, and every PCA
+   channel is dead.
+3. **Send `z`.** Every joint wiggles in sequence with its name and channel
+   printed. A servo that stays still on its turn: wrong channel plug, dead
+   servo, or no servo power on V+.
+4. **If joints move one at a time (`z`) but sag or freeze when walking**, the
+   servo supply is browning out under the combined load — see the power
+   section of the main README.
 
 ## Logical angle convention
 
