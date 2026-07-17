@@ -53,14 +53,24 @@ on the ground), so the robot never gets yanked mid-step.
 | `+` / `-` | Nudge the selected joint's offset ±2° (servo moves immediately) |
 | `<` / `>` | Coarse nudge ±10° (for large horn-mount offsets) |
 | `j` | Wiggle the selected joint to identify it physically |
+| `v` | Move to the **calibration pose**: femur + tibia hang plumb straight down, knee locked straight |
 | `z` | **Diagnostic scan**: wiggle every enabled joint in sequence, announcing each over Serial |
-| `n` | Re-apply the neutral stance to all enabled legs |
+| `n` | Ease back to the neutral standing stance |
 | `p` | Print the full offset table |
 | `h` | Help |
 
-Workflow: upload → legs move to neutral → nudge each joint until the physical
-pose matches the photo → press `p` → copy the printed offsets into the
-`offsetDeg` fields in `legs[]` → re-upload. Offsets then persist.
+Workflow: prop the body **at least 25 cm** off the bench (the feet hang
+~245 mm below the hip axis in the calibration pose) → press `v` → for each
+leg, nudge the **femur** until it hangs plumb vertical, the **tibia** until
+it continues dead straight in line with it, and the **coxa** (checked from
+directly above) until the leg points straight out from its body corner →
+press `p` → copy the printed offsets into the `offsetDeg` fields in
+`legs[]` → re-upload. Offsets are pose-independent, so values tuned in the
+hanging pose are exactly right for standing and walking.
+
+If a knee physically can't straighten all the way (bracket hits the femur),
+don't force it — calibrate that tibia against a 90° square at the neutral
+stance (`n`) instead.
 
 ## How the tripod gait works
 

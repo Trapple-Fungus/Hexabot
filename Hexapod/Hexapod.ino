@@ -79,6 +79,14 @@ struct LegPose {
 // offsets and the hip-axis-height assumption move this number.
 const LegPose NEUTRAL = { 0, 15, -90 };
 
+// Calibration pose ('v' command): femur and tibia both plumb straight
+// down with the knee locked straight — trivially easy to eyeball
+// against gravity or the body's vertical sides. Offsets are
+// pose-independent, so values tuned here are exactly right for
+// walking. The feet hang ~245 mm below the hip axis in this pose:
+// prop the body at least that high off the bench BEFORE pressing 'v'.
+const LegPose CALIB_POSE = { 0, -90, 0 };
+
 // ---- Per-leg configuration ----
 // sign flips a joint's direction. The six legs are identical printed
 // assemblies (the CAD has one variant of each part) bolted radially
@@ -235,11 +243,6 @@ void applyLegPose(uint8_t li, const LegPose &p) {
   backend.writeUs(li, TIBIA, legs[li].joint[TIBIA], jointToUs(legs[li].joint[TIBIA], p.tibia));
 }
 
-void applyAllLegs(const LegPose &p) {
-  for (uint8_t li = 0; li < NUM_LEGS; li++)
-    applyLegPose(li, p);
-}
-
 LegPose lerpPose(const LegPose &a, const LegPose &b, float t) {
   LegPose r;
   r.coxa  = a.coxa  + (b.coxa  - a.coxa)  * t;
@@ -310,16 +313,23 @@ void runHalfCycle(bool aSwings, Motion m) {
   }
 }
 
-void returnToNeutral() {
+// Eases all legs from wherever they are to a target pose — used for
+// stopping, the 'n' neutral command, and the 'v' calibration pose, so
+// none of them snap the servos.
+void moveAllTo(const LegPose &target) {
   LegPose start[NUM_LEGS];
   for (uint8_t li = 0; li < NUM_LEGS; li++)
     start[li] = currentPose[li];
   for (int i = 0; i <= GAIT_STEPS; i++) {
     float t = easeInOutCubic((float)i / GAIT_STEPS);
     for (uint8_t li = 0; li < NUM_LEGS; li++)
-      applyLegPose(li, lerpPose(start[li], NEUTRAL, t));
+      applyLegPose(li, lerpPose(start[li], target, t));
     delay(STEP_MS);
   }
+}
+
+void returnToNeutral() {
+  moveAllTo(NEUTRAL);
   Serial.println(F("Stopped — neutral stance."));
 }
 
@@ -349,7 +359,8 @@ void printHelp() {
   Serial.println(F("Motion:  w fwd | s back | a crab left | d crab right"));
   Serial.println(F("         q turn left | e turn right | x stop"));
   Serial.println(F("Calibrate: 0-5 leg | c/f/t joint | +/- nudge 2deg | </> 10deg"));
-  Serial.println(F("           j wiggle joint | n neutral | p print offsets | h help"));
+  Serial.println(F("           v calib pose (legs plumb down) | j wiggle joint"));
+  Serial.println(F("           n neutral | p print offsets | h help"));
   Serial.println(F("Diagnose:  z wiggle every joint in sequence (finds dead wiring)"));
 }
 
@@ -459,8 +470,13 @@ void handleCommand(char c) {
   else if (c == 'j' || c == 'J') { wiggleJoint(); }
   else if (c == 'z' || c == 'Z') { scanAllJoints(); }
   else if (c == 'n' || c == 'N') {
-    applyAllLegs(NEUTRAL);
+    moveAllTo(NEUTRAL);
     Serial.println(F("Neutral stance applied."));
+  }
+  else if (c == 'v' || c == 'V') {
+    moveAllTo(CALIB_POSE);
+    Serial.println(F("Calibration pose: femur + tibia plumb straight down."));
+    Serial.println(F("(Body must be propped >= 25 cm up — feet hang ~245 mm.)"));
   }
   else if (c == 'p' || c == 'P') { printOffsets(); }
   else if (c == 'h' || c == 'H') { printHelp(); }
@@ -514,7 +530,7 @@ void setup() {
   // Build tag: bump this whenever the sketch changes, so a stale upload
   // (e.g. the IDE compiling an old buffer) is obvious in the Serial
   // Monitor without counting joints.
-  Serial.println(F("Hexapod fw build 5 (3in stance + coxa-only mirror)"));
+  Serial.println(F("Hexapod fw build 6 (v calibration pose: legs plumb down)"));
   Serial.print(F("Hexapod ready (PCA9685 + Uno pins). Joints attached: "));
   Serial.println(attached);
   if (skipped > 0) {
